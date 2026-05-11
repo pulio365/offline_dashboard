@@ -34,7 +34,7 @@ const db = mysql.createPool({
   connectionLimit: 10,
 });
 
-// ─── 슬랙 알림 ─────────────────────────────────────────
+// ─── 슬랙 알림 및 라벨 설정 ──────────────────────────────
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
 
 const GENDER_LABEL = { male: "남성", female: "여성" };
@@ -59,6 +59,8 @@ const CAT_LABEL = {
   massage_gun: "마사지건",
   other: "기타",
 };
+
+// 제품 라벨 (신규/기존 키 모두 대응)
 const PRODUCT_LABEL = {
   pulizee: "풀리지 허벅지 마사지기",
   calf_v3: "종아리 마사지기 V3",
@@ -77,7 +79,47 @@ const PRODUCT_LABEL = {
   hand_v1: "손 마사지기",
   pediplaner: "패디플래너",
   airgua: "에어괄사 마사지기",
+  // 기존 키 호환용
+  lb_pulley_thigh: "풀리지 허벅지 마사지기",
+  lb_calf_v3: "종아리 마사지기 V3",
+  lb_boots: "풀리션 마사지 부츠",
+  bk_mat: "마사지 매트",
+  bk_backpuller: "백풀러 허리 마사지기",
+  bk_cushion: "등 허리 쿠션 마사지기",
+  ns_tapping_v3: "목 어깨 두드림 마사지기 V3",
+  ns_neckpuller: "넥풀러 목 어깨 홈케어",
+  ns_thepillow: "더필로 마사지베개",
+  ns_travel_pillow: "여행용 목 베개 마사지기",
+  mg_minimax: "미니맥스 마사지건",
+  mg_gun_belt: "마사지 건 & 벨트",
+  mg_turbofit: "터보핏 마사지건",
+  ww_pullio: "풀리오 웰워크",
+  etc_hand: "손 마사지기",
+  etc_pediplaner: "패디플래너",
+  etc_airgua: "에어괄사 마사지기",
 };
+
+// [추가] 기존 키 -> 신규 키 변환 매핑
+const PRODUCT_KEY_MAP = {
+  lb_pulley_thigh: "pulizee",
+  lb_calf_v3: "calf_v3",
+  lb_boots: "pulition",
+  bk_mat: "mat",
+  bk_backpuller: "backpuller_v1",
+  bk_cushion: "back_cushion",
+  ns_tapping_v3: "neck_tapping_v3",
+  ns_neckpuller: "neckpuller",
+  ns_thepillow: "thepillow",
+  ns_travel_pillow: "neck_travel",
+  mg_minimax: "minimax",
+  mg_gun_belt: "gun_belt",
+  mg_turbofit: "turbofit",
+  ww_pullio: "wellwork",
+  etc_hand: "hand_v1",
+  etc_pediplaner: "pediplaner",
+  etc_airgua: "airgua",
+};
+
 const BUYPURPOSE_LABEL = {
   massage_strength: "마사지강도",
   design: "디자인만족",
@@ -97,10 +139,17 @@ const STORE_LABEL = {
   goyang: "스타필드 고양점",
 };
 
+// ─── 헬퍼 함수 ─────────────────────────────────────────
 const stars = (n) => "★".repeat(n) + "☆".repeat(5 - n);
 const revisitBar = (n) =>
   ["🔴", "🟠", "🟡", "🟢", "💚"][n - 1] + " " + n + "/5";
 const labelArr = (arr, map) => arr.map((v) => map[v] || v).join(", ") || "-";
+
+// [추가] 제품 키를 신규 버전으로 통일하는 함수
+const normalizeProducts = (productKeys) => {
+  if (!Array.isArray(productKeys)) return [];
+  return productKeys.map((key) => PRODUCT_KEY_MAP[key] || key);
+};
 
 async function sendSlackNotification(data) {
   if (!SLACK_WEBHOOK_URL) return;
@@ -214,25 +263,8 @@ const VALID_CATEGORIES = [
   "massage_gun",
   "other",
 ];
-const VALID_PRODUCTS = [
-  "pulizee",
-  "calf_v3",
-  "pulition",
-  "mat",
-  "backpuller_v1",
-  "back_cushion",
-  "neck_tapping_v3",
-  "neckpuller",
-  "thepillow",
-  "neck_travel",
-  "minimax",
-  "gun_belt",
-  "turbofit",
-  "wellwork",
-  "hand_v1",
-  "pediplaner",
-  "airgua",
-];
+const VALID_PRODUCTS = Object.keys(PRODUCT_LABEL); // 모든 키 허용
+
 const VALID_BUY_PURPOSE = [
   "massage_strength",
   "design",
@@ -277,6 +309,7 @@ app.post("/api/survey", async (req, res) => {
       comment_praise,
     } = req.body;
 
+    // ... (기존 검증 로직 동일) ...
     if (!store_id || store_id.length > 50)
       return res.status(400).json({ error: "store_id 오류" });
     if (!VALID_GENDER.includes(gender))
@@ -372,7 +405,7 @@ app.get("/api/survey/results", async (req, res) => {
     const [rows] = await db.execute(`
       SELECT
         store_id,
-        COUNT(*)                           AS total,
+        COUNT(*)                                   AS total,
         ROUND(AVG(rating_design),    2)    AS avg_design,
         ROUND(AVG(rating_usability), 2)    AS avg_usability,
         ROUND(AVG(rating_staff),     2)    AS avg_staff,
@@ -417,12 +450,24 @@ app.get("/api/survey/list", async (req, res) => {
       params,
     );
 
+    // [수정] 결과 데이터의 products 키를 신규 키로 정규화
+    const normalizedRows = rows.map((row) => {
+      let prodArr = [];
+      try {
+        prodArr = JSON.parse(row.products || "[]");
+      } catch (e) {}
+      return {
+        ...row,
+        products: JSON.stringify(normalizeProducts(prodArr)),
+      };
+    });
+
     const [[{ total }]] = await db.execute(
       `SELECT COUNT(*) AS total FROM survey_responses ${where}`,
       storeFilter ? [storeFilter] : [],
     );
 
-    res.json({ rows, total, page, limit });
+    res.json({ rows: normalizedRows, total, page, limit });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "서버 오류" });
@@ -440,59 +485,36 @@ app.get("/api/dashboard", async (req, res) => {
 
     // 1) KPI + 별점 평균
     const [[kpi]] = await db.execute(
-      `
-      SELECT
-        COUNT(*)                           AS total,
-        ROUND(AVG(rating_design),    2)    AS avg_design,
-        ROUND(AVG(rating_usability), 2)    AS avg_usability,
-        ROUND(AVG(rating_staff),     2)    AS avg_staff,
-        ROUND(AVG(rating_store),     2)    AS avg_store,
-        ROUND(AVG(rating_guide),     2)    AS avg_guide,
-        ROUND(AVG(revisit_score),    2)    AS avg_revisit
-      FROM survey_responses ${where}
-    `,
+      `SELECT COUNT(*) AS total, ROUND(AVG(rating_design), 2) AS avg_design, ROUND(AVG(rating_usability), 2) AS avg_usability, ROUND(AVG(rating_staff), 2) AS avg_staff, ROUND(AVG(rating_store), 2) AS avg_store, ROUND(AVG(rating_guide), 2) AS avg_guide, ROUND(AVG(revisit_score), 2) AS avg_revisit FROM survey_responses ${where}`,
       params,
     );
 
-    // 2) 매장별 응답 수 + 재방문 평균
-    const [byStore] = await db.execute(`
-      SELECT store_id, COUNT(*) AS total,
-             ROUND(AVG(revisit_score), 2) AS avg_revisit
-      FROM survey_responses
-      GROUP BY store_id ORDER BY total DESC
-    `);
+    // 2) 매장별
+    const [byStore] = await db.execute(
+      `SELECT store_id, COUNT(*) AS total, ROUND(AVG(revisit_score), 2) AS avg_revisit FROM survey_responses GROUP BY store_id ORDER BY total DESC`,
+    );
 
     // 3) 성별
     const [genderRows] = await db.execute(
-      `
-      SELECT gender, COUNT(*) AS cnt
-      FROM survey_responses ${where}
-      GROUP BY gender
-    `,
+      `SELECT gender, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY gender`,
       params,
     );
 
     // 4) 연령대
     const [ageRows] = await db.execute(
-      `
-      SELECT age_group, COUNT(*) AS cnt
-      FROM survey_responses ${where}
-      GROUP BY age_group ORDER BY age_group
-    `,
+      `SELECT age_group, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY age_group ORDER BY age_group`,
       params,
     );
 
-    // 5) 전체 row (JSON 집계용)
+    // 5) 전체 row
     const [allRows] = await db.execute(
-      `SELECT purpose, categories, products, buy_purpose, visit_route,
-              comment_improve, comment_praise, gender, submitted_at
-       FROM survey_responses ${where} ORDER BY submitted_at DESC`,
+      `SELECT purpose, categories, products, buy_purpose, visit_route, comment_improve, comment_praise, gender, submitted_at FROM survey_responses ${where} ORDER BY submitted_at DESC`,
       params,
     );
 
     const total = kpi.total || 1;
 
-    // JSON 배열 집계
+    // [수정] JSON 배열 집계 시 제품 키 정규화 적용
     const countArr = (rows, field) => {
       const map = {};
       rows.forEach((r) => {
@@ -500,6 +522,12 @@ app.get("/api/dashboard", async (req, res) => {
         try {
           arr = JSON.parse(r[field] || "[]");
         } catch {}
+
+        // 제품 필드라면 키를 신규 키로 변환해서 합산
+        if (field === "products") {
+          arr = normalizeProducts(arr);
+        }
+
         arr.forEach((v) => {
           map[v] = (map[v] || 0) + 1;
         });
@@ -527,7 +555,7 @@ app.get("/api/dashboard", async (req, res) => {
       });
     });
 
-    // VOC 최신 20건
+    // VOC
     const voc = allRows
       .slice(0, 20)
       .filter((r) => r.comment_improve || r.comment_praise)
@@ -537,13 +565,9 @@ app.get("/api/dashboard", async (req, res) => {
         date: r.submitted_at,
       }));
 
-    // 일별 응답 추이 (최근 14일)
+    // 추이
     const [trendRows] = await db.execute(
-      `SELECT DATE(submitted_at) AS day, COUNT(*) AS cnt
-       FROM survey_responses
-       WHERE submitted_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
-       ${storeFilter ? "AND store_id = ?" : ""}
-       GROUP BY day ORDER BY day`,
+      `SELECT DATE(submitted_at) AS day, COUNT(*) AS cnt FROM survey_responses WHERE submitted_at >= DATE_SUB(NOW(), INTERVAL 14 DAY) ${storeFilter ? "AND store_id = ?" : ""} GROUP BY day ORDER BY day`,
       storeFilter ? [storeFilter] : [],
     );
 
