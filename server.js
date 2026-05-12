@@ -462,16 +462,17 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
     const countArr = (rows, field, normalize = false) => {
       const map = {};
       rows.forEach((r) => {
-        let arr = normalize
-          ? normalizeProductKeys(r[field])
-          : (() => {
-              try {
-                return JSON.parse(r[field] || "[]");
-              } catch {
-                return [];
-              }
-            })();
-        arr.forEach((v) => {
+        if (!r[field]) return;
+        let arr = [];
+        try {
+          arr = normalize
+            ? normalizeProductKeys(r[field])
+            : JSON.parse(r[field]);
+          if (!Array.isArray(arr)) arr = [];
+        } catch {
+          arr = [];
+        }
+        arr.filter(Boolean).forEach((v) => {
           map[v] = (map[v] || 0) + 1;
         });
       });
