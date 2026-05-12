@@ -35,7 +35,7 @@ const db = mysql.createPool({
 });
 
 // ─── 대시보드 인증 미들웨어 ────────────────────────────
-const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || "change-this-password";
+const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || "1234";
 
 function authDashboard(req, res, next) {
   const token = req.headers["x-dashboard-token"] || req.query.token;
@@ -507,18 +507,46 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
     const buyCount = countArr(allRows, "buy_purpose");
     const routeCount = countArr(allRows, "visit_route");
 
-    // 성별 × 카테고리
+    // 성별 × 카테고리, 성별 x 제품
     const genderCat = { male: {}, female: {} };
+    const genderProd = { male: {}, female: {} };
     allRows.forEach((r) => {
-      const g = r.gender;
+      const g = r.gender; // 'male' 또는 'female'
       if (!genderCat[g]) return;
+
+      // 카테고리 집계
       let cats = [];
       try {
-        cats = JSON.parse(r.categories || "[]");
-      } catch {}
-      cats.forEach((c) => {
-        genderCat[g][c] = (genderCat[g][c] || 0) + 1;
-      });
+        const rawCats = r.categories;
+        cats =
+          typeof rawCats === "string" ? JSON.parse(rawCats || "[]") : rawCats;
+      } catch (e) {
+        cats = [];
+      }
+      if (Array.isArray(cats)) {
+        cats.forEach((c) => {
+          genderCat[g][c] = (genderCat[g][c] || 0) + 1;
+        });
+      }
+
+      // 제품 집계 (정규화 포함)
+      let prods = [];
+      try {
+        const rawProds = r.products;
+        prods =
+          typeof rawProds === "string"
+            ? JSON.parse(rawProds || "[]")
+            : rawProds;
+      } catch (e) {
+        prods = [];
+      }
+      if (Array.isArray(prods)) {
+        prods.forEach((p) => {
+          const normalizedKey = PRODUCT_KEY_MAP[p] || p;
+          genderProd[g][normalizedKey] =
+            (genderProd[g][normalizedKey] || 0) + 1;
+        });
+      }
     });
 
     // VOC
@@ -564,6 +592,7 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
       buy_purpose: buyCount,
       route: routeCount, // 프론트에서는 'route'라는 키로 받음
       gender_cat: genderCat,
+      gender_prod: genderProd,
       voc,
       trend: trendRows,
       store_list: storeList,
