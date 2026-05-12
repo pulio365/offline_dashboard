@@ -19,7 +19,7 @@ app.use(
       "https://m.puliodays.com",
     ],
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "X-Dashboard-Token"],
   }),
 );
 
@@ -34,9 +34,52 @@ const db = mysql.createPool({
   connectionLimit: 10,
 });
 
-// ─── 슬랙 알림 및 라벨 설정 ──────────────────────────────
-const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
+// ─── 대시보드 인증 미들웨어 ────────────────────────────
+const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || "change-this-password";
 
+function authDashboard(req, res, next) {
+  const token = req.headers["x-dashboard-token"] || req.query.token;
+  if (!token || token !== DASHBOARD_TOKEN) {
+    return res.status(401).json({ error: "인증 실패" });
+  }
+  next();
+}
+
+// ─── 구 키 → 신 키 매핑 테이블 ──────────────────────────
+// 구 survey.html에서 저장된 데이터도 대시보드에서 올바르게 표시됨
+const PRODUCT_KEY_MAP = {
+  // 구 키 → 신 키
+  lb_pulley_thigh: "pulizee",
+  lb_calf_v3: "calf_v3",
+  lb_boots: "pulition",
+  bk_mat: "mat",
+  bk_backpuller: "backpuller_v1",
+  bk_cushion: "back_cushion",
+  ns_tapping_v3: "neck_tapping_v3",
+  ns_neckpuller: "neckpuller",
+  ns_thepillow: "thepillow",
+  ns_travel_pillow: "neck_travel",
+  mg_minimax: "minimax",
+  mg_gun_belt: "gun_belt",
+  mg_turbofit: "turbofit",
+  ww_pullio: "wellwork",
+  etc_hand: "hand_v1",
+  etc_pediplaner: "pediplaner",
+  etc_airgua: "airgua",
+};
+
+// JSON 배열에서 구 키 → 신 키로 정규화
+function normalizeProductKeys(jsonStr) {
+  let arr = [];
+  try {
+    arr = JSON.parse(jsonStr || "[]");
+  } catch {
+    return [];
+  }
+  return arr.map((k) => PRODUCT_KEY_MAP[k] || k);
+}
+
+// ─── 레이블 맵 ────────────────────────────────────────
 const GENDER_LABEL = { male: "남성", female: "여성" };
 const AGE_LABEL = {
   "10s": "10대",
@@ -59,8 +102,6 @@ const CAT_LABEL = {
   massage_gun: "마사지건",
   other: "기타",
 };
-
-// 제품 라벨 (신규/기존 키 모두 대응)
 const PRODUCT_LABEL = {
   pulizee: "풀리지 허벅지 마사지기",
   calf_v3: "종아리 마사지기 V3",
@@ -79,47 +120,7 @@ const PRODUCT_LABEL = {
   hand_v1: "손 마사지기",
   pediplaner: "패디플래너",
   airgua: "에어괄사 마사지기",
-  // 기존 키 호환용
-  lb_pulley_thigh: "풀리지 허벅지 마사지기",
-  lb_calf_v3: "종아리 마사지기 V3",
-  lb_boots: "풀리션 마사지 부츠",
-  bk_mat: "마사지 매트",
-  bk_backpuller: "백풀러 허리 마사지기",
-  bk_cushion: "등 허리 쿠션 마사지기",
-  ns_tapping_v3: "목 어깨 두드림 마사지기 V3",
-  ns_neckpuller: "넥풀러 목 어깨 홈케어",
-  ns_thepillow: "더필로 마사지베개",
-  ns_travel_pillow: "여행용 목 베개 마사지기",
-  mg_minimax: "미니맥스 마사지건",
-  mg_gun_belt: "마사지 건 & 벨트",
-  mg_turbofit: "터보핏 마사지건",
-  ww_pullio: "풀리오 웰워크",
-  etc_hand: "손 마사지기",
-  etc_pediplaner: "패디플래너",
-  etc_airgua: "에어괄사 마사지기",
 };
-
-// [추가] 기존 키 -> 신규 키 변환 매핑
-const PRODUCT_KEY_MAP = {
-  lb_pulley_thigh: "pulizee",
-  lb_calf_v3: "calf_v3",
-  lb_boots: "pulition",
-  bk_mat: "mat",
-  bk_backpuller: "backpuller_v1",
-  bk_cushion: "back_cushion",
-  ns_tapping_v3: "neck_tapping_v3",
-  ns_neckpuller: "neckpuller",
-  ns_thepillow: "thepillow",
-  ns_travel_pillow: "neck_travel",
-  mg_minimax: "minimax",
-  mg_gun_belt: "gun_belt",
-  mg_turbofit: "turbofit",
-  ww_pullio: "wellwork",
-  etc_hand: "hand_v1",
-  etc_pediplaner: "pediplaner",
-  etc_airgua: "airgua",
-};
-
 const BUYPURPOSE_LABEL = {
   massage_strength: "마사지강도",
   design: "디자인만족",
@@ -134,22 +135,20 @@ const ROUTE_LABEL = {
   pass_by: "지나가다발견",
   existing: "기존이용자",
 };
+// ★ 매장은 환경변수 또는 이 맵으로 관리 — 새 매장 추가 시 여기만 수정
 const STORE_LABEL = {
   suwon: "타임빌라스 수원점",
   goyang: "스타필드 고양점",
+  // 새 매장 추가: hongdae: "홍대점"
 };
 
-// ─── 헬퍼 함수 ─────────────────────────────────────────
 const stars = (n) => "★".repeat(n) + "☆".repeat(5 - n);
 const revisitBar = (n) =>
   ["🔴", "🟠", "🟡", "🟢", "💚"][n - 1] + " " + n + "/5";
 const labelArr = (arr, map) => arr.map((v) => map[v] || v).join(", ") || "-";
 
-// [추가] 제품 키를 신규 버전으로 통일하는 함수
-const normalizeProducts = (productKeys) => {
-  if (!Array.isArray(productKeys)) return [];
-  return productKeys.map((key) => PRODUCT_KEY_MAP[key] || key);
-};
+// ─── 슬랙 알림 ────────────────────────────────────────
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL || "";
 
 async function sendSlackNotification(data) {
   if (!SLACK_WEBHOOK_URL) return;
@@ -163,9 +162,6 @@ async function sendSlackNotification(data) {
   const buyPurpose = labelArr(data.buy_purpose, BUYPURPOSE_LABEL);
   const routes = labelArr(data.route, ROUTE_LABEL);
   const now = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-
-  const hasImprove = data.comment_improve?.trim();
-  const hasPraise = data.comment_praise?.trim();
 
   const payload = {
     blocks: [
@@ -223,9 +219,9 @@ async function sendSlackNotification(data) {
     ],
   };
 
-  if (hasImprove || hasPraise) {
+  if (data.comment_improve?.trim() || data.comment_praise?.trim()) {
     payload.blocks.push({ type: "divider" });
-    if (hasImprove)
+    if (data.comment_improve?.trim())
       payload.blocks.push({
         type: "section",
         text: {
@@ -233,7 +229,7 @@ async function sendSlackNotification(data) {
           text: `*🛠 아쉬운 점*\n>${data.comment_improve}`,
         },
       });
-    if (hasPraise)
+    if (data.comment_praise?.trim())
       payload.blocks.push({
         type: "section",
         text: { type: "mrkdwn", text: `*💛 칭찬*\n>${data.comment_praise}` },
@@ -263,8 +259,7 @@ const VALID_CATEGORIES = [
   "massage_gun",
   "other",
 ];
-const VALID_PRODUCTS = Object.keys(PRODUCT_LABEL); // 모든 키 허용
-
+const VALID_PRODUCTS = Object.keys(PRODUCT_LABEL); // 단일 소스 — PRODUCT_LABEL에서 자동 추출
 const VALID_BUY_PURPOSE = [
   "massage_strength",
   "design",
@@ -309,7 +304,6 @@ app.post("/api/survey", async (req, res) => {
       comment_praise,
     } = req.body;
 
-    // ... (기존 검증 로직 동일) ...
     if (!store_id || store_id.length > 50)
       return res.status(400).json({ error: "store_id 오류" });
     if (!VALID_GENDER.includes(gender))
@@ -398,26 +392,298 @@ app.post("/api/survey", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════
-//  GET /api/survey/results  — 매장별 통계
+//  GET /api/dashboard  — 대시보드 통계 (인증 필요)
+//  Query: ?store=goyang&from=2025-01-01&to=2025-12-31
+// ══════════════════════════════════════════════════════
+app.get("/api/dashboard", authDashboard, async (req, res) => {
+  try {
+    const storeFilter = req.query.store || null;
+    const fromDate = req.query.from || null; // YYYY-MM-DD
+    const toDate = req.query.to || null; // YYYY-MM-DD
+
+    // 동적 WHERE 절 빌더
+    const conditions = [];
+    const params = [];
+    if (storeFilter) {
+      conditions.push("store_id = ?");
+      params.push(storeFilter);
+    }
+    if (fromDate) {
+      conditions.push("DATE(submitted_at) >= ?");
+      params.push(fromDate);
+    }
+    if (toDate) {
+      conditions.push("DATE(submitted_at) <= ?");
+      params.push(toDate);
+    }
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+
+    // 1) KPI
+    const [[kpi]] = await db.execute(
+      `SELECT COUNT(*) AS total,
+              ROUND(AVG(rating_design),    2) AS avg_design,
+              ROUND(AVG(rating_usability), 2) AS avg_usability,
+              ROUND(AVG(rating_staff),     2) AS avg_staff,
+              ROUND(AVG(rating_store),     2) AS avg_store,
+              ROUND(AVG(rating_guide),     2) AS avg_guide,
+              ROUND(AVG(revisit_score),    2) AS avg_revisit
+       FROM survey_responses ${where}`,
+      params,
+    );
+
+    // 2) 매장별
+    const [byStore] = await db.execute(`
+      SELECT store_id, COUNT(*) AS total,
+             ROUND(AVG(revisit_score), 2) AS avg_revisit
+      FROM survey_responses
+      GROUP BY store_id ORDER BY total DESC`);
+
+    // 3) 성별
+    const [genderRows] = await db.execute(
+      `SELECT gender, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY gender`,
+      params,
+    );
+
+    // 4) 연령대
+    const [ageRows] = await db.execute(
+      `SELECT age_group, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY age_group ORDER BY age_group`,
+      params,
+    );
+
+    // 5) 원본 rows (JSON 집계용)
+    const [allRows] = await db.execute(
+      `SELECT purpose, categories, products, buy_purpose, visit_route,
+              comment_improve, comment_praise, gender, submitted_at
+       FROM survey_responses ${where} ORDER BY submitted_at DESC`,
+      params,
+    );
+
+    // JSON 배열 집계 (구 키 → 신 키 정규화 포함)
+    const countArr = (rows, field, normalize = false) => {
+      const map = {};
+      rows.forEach((r) => {
+        let arr = normalize
+          ? normalizeProductKeys(r[field])
+          : (() => {
+              try {
+                return JSON.parse(r[field] || "[]");
+              } catch {
+                return [];
+              }
+            })();
+        arr.forEach((v) => {
+          map[v] = (map[v] || 0) + 1;
+        });
+      });
+      return map;
+    };
+
+    const purposeCount = countArr(allRows, "purpose");
+    const catCount = countArr(allRows, "categories");
+    const productCount = countArr(allRows, "products", true); // 구→신 키 정규화
+    const buyCount = countArr(allRows, "buy_purpose");
+    const routeCount = countArr(allRows, "visit_route");
+
+    // 성별 × 카테고리
+    const genderCat = { male: {}, female: {} };
+    allRows.forEach((r) => {
+      const g = r.gender;
+      if (!genderCat[g]) return;
+      let cats = [];
+      try {
+        cats = JSON.parse(r.categories || "[]");
+      } catch {}
+      cats.forEach((c) => {
+        genderCat[g][c] = (genderCat[g][c] || 0) + 1;
+      });
+    });
+
+    // VOC
+    const voc = allRows
+      .filter((r) => r.comment_improve || r.comment_praise)
+      .slice(0, 30)
+      .map((r) => ({
+        improve: r.comment_improve || "",
+        praise: r.comment_praise || "",
+        date: r.submitted_at,
+      }));
+
+    // 일별 추이 (14일 or 날짜 범위 내)
+    const trendConditions = [...conditions];
+    const trendParams = [...params];
+    if (!fromDate && !toDate) {
+      trendConditions.push("submitted_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)");
+    }
+    const trendWhere = trendConditions.length
+      ? "WHERE " + trendConditions.join(" AND ")
+      : "";
+    const [trendRows] = await db.execute(
+      `SELECT DATE(submitted_at) AS day, COUNT(*) AS cnt
+       FROM survey_responses ${trendWhere}
+       GROUP BY day ORDER BY day`,
+      trendParams,
+    );
+
+    // 가용 매장 목록 (STORE_LABEL 기반)
+    const storeList = Object.entries(STORE_LABEL).map(([id, name]) => ({
+      id,
+      name,
+    }));
+
+    res.json({
+      kpi,
+      byStore,
+      gender: genderRows,
+      age: ageRows,
+      purpose: purposeCount,
+      categories: catCount,
+      products: productCount,
+      buy_purpose: buyCount,
+      route: routeCount,
+      gender_cat: genderCat,
+      voc,
+      trend: trendRows,
+      store_list: storeList,
+      // 프론트에 레이블 맵도 함께 전달 (확장 시 자동 반영)
+      labels: {
+        PRODUCT_LABEL,
+        CAT_LABEL,
+        PURPOSE_LABEL,
+        BUY_LABEL: BUYPURPOSE_LABEL,
+        ROUTE_LABEL,
+        STORE_LABEL,
+      },
+    });
+  } catch (e) {
+    console.error("[GET /api/dashboard]", e);
+    res.status(500).json({ error: "서버 오류" });
+  }
+});
+
+// ══════════════════════════════════════════════════════
+//  GET /api/export  — 엑셀용 CSV 다운로드 (인증 필요)
+//  Query: ?store=goyang&from=2025-01-01&to=2025-12-31
+// ══════════════════════════════════════════════════════
+app.get("/api/export", authDashboard, async (req, res) => {
+  try {
+    const storeFilter = req.query.store || null;
+    const fromDate = req.query.from || null;
+    const toDate = req.query.to || null;
+
+    const conditions = [];
+    const params = [];
+    if (storeFilter) {
+      conditions.push("store_id = ?");
+      params.push(storeFilter);
+    }
+    if (fromDate) {
+      conditions.push("DATE(submitted_at) >= ?");
+      params.push(fromDate);
+    }
+    if (toDate) {
+      conditions.push("DATE(submitted_at) <= ?");
+      params.push(toDate);
+    }
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+
+    const [rows] = await db.execute(
+      `SELECT id, store_id, gender, age_group,
+              purpose, categories, products,
+              rating_design, rating_usability, buy_purpose,
+              rating_staff, rating_store, rating_guide, visit_route,
+              revisit_score, comment_improve, comment_praise, submitted_at
+       FROM survey_responses ${where}
+       ORDER BY submitted_at DESC`,
+      params,
+    );
+
+    const labelArr2 = (jsonStr, map, normalize = false) => {
+      const arr = normalize
+        ? normalizeProductKeys(jsonStr)
+        : (() => {
+            try {
+              return JSON.parse(jsonStr || "[]");
+            } catch {
+              return [];
+            }
+          })();
+      return arr.map((v) => map[v] || v).join(" | ");
+    };
+
+    // CSV 헤더
+    const header = [
+      "ID",
+      "매장",
+      "제출일시",
+      "성별",
+      "연령대",
+      "방문목적",
+      "방문경로",
+      "체험카테고리",
+      "체험제품",
+      "구매고려요소",
+      "디자인별점",
+      "사용성별점",
+      "직원친절도",
+      "인테리어청결",
+      "체험안내",
+      "재방문의향",
+      "아쉬운점",
+      "칭찬",
+    ].join(",");
+
+    const csvRows = rows.map((r) =>
+      [
+        r.id,
+        `"${STORE_LABEL[r.store_id] || r.store_id}"`,
+        `"${new Date(r.submitted_at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}"`,
+        GENDER_LABEL[r.gender] || r.gender,
+        AGE_LABEL[r.age_group] || r.age_group,
+        `"${labelArr2(r.purpose, PURPOSE_LABEL)}"`,
+        `"${labelArr2(r.visit_route, ROUTE_LABEL)}"`,
+        `"${labelArr2(r.categories, CAT_LABEL)}"`,
+        `"${labelArr2(r.products, PRODUCT_LABEL, true)}"`, // 구→신 키 정규화
+        `"${labelArr2(r.buy_purpose, BUYPURPOSE_LABEL)}"`,
+        r.rating_design,
+        r.rating_usability,
+        r.rating_staff,
+        r.rating_store,
+        r.rating_guide,
+        r.revisit_score,
+        `"${(r.comment_improve || "").replace(/"/g, '""')}"`,
+        `"${(r.comment_praise || "").replace(/"/g, '""')}"`,
+      ].join(","),
+    );
+
+    const csv = "\uFEFF" + [header, ...csvRows].join("\n"); // BOM for 엑셀 한글
+    const filename = `pulio_survey_${storeFilter || "all"}_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("[GET /api/export]", e);
+    res.status(500).json({ error: "서버 오류" });
+  }
+});
+
+// ══════════════════════════════════════════════════════
+//  GET /api/survey/results  — 매장별 통계 (기존 유지)
 // ══════════════════════════════════════════════════════
 app.get("/api/survey/results", async (req, res) => {
   try {
     const [rows] = await db.execute(`
-      SELECT
-        store_id,
-        COUNT(*)                                   AS total,
-        ROUND(AVG(rating_design),    2)    AS avg_design,
-        ROUND(AVG(rating_usability), 2)    AS avg_usability,
-        ROUND(AVG(rating_staff),     2)    AS avg_staff,
-        ROUND(AVG(rating_store),     2)    AS avg_store,
-        ROUND(AVG(rating_guide),     2)    AS avg_guide,
-        ROUND(AVG(revisit_score),    2)    AS avg_revisit,
-        ROUND((AVG(rating_design)+AVG(rating_usability)+
-               AVG(rating_staff)+AVG(rating_store)+AVG(rating_guide))/5, 2) AS avg_overall
+      SELECT store_id, COUNT(*) AS total,
+             ROUND(AVG(rating_design),    2) AS avg_design,
+             ROUND(AVG(rating_usability), 2) AS avg_usability,
+             ROUND(AVG(rating_staff),     2) AS avg_staff,
+             ROUND(AVG(rating_store),     2) AS avg_store,
+             ROUND(AVG(rating_guide),     2) AS avg_guide,
+             ROUND(AVG(revisit_score),    2) AS avg_revisit,
+             ROUND((AVG(rating_design)+AVG(rating_usability)+
+                    AVG(rating_staff)+AVG(rating_store)+AVG(rating_guide))/5,2) AS avg_overall
       FROM survey_responses
-      GROUP BY store_id
-      ORDER BY total DESC
-    `);
+      GROUP BY store_id ORDER BY total DESC`);
     res.json(rows);
   } catch (e) {
     console.error(e);
@@ -434,160 +700,27 @@ app.get("/api/survey/list", async (req, res) => {
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
     const offset = (page - 1) * limit;
     const storeFilter = req.query.store || null;
-
     const where = storeFilter ? "WHERE store_id = ?" : "";
     const params = storeFilter ? [storeFilter, limit, offset] : [limit, offset];
 
     const [rows] = await db.execute(
       `SELECT id, store_id, gender, age_group,
-              purpose, categories, products,
-              rating_design, rating_usability, buy_purpose,
+              purpose, categories, products, rating_design, rating_usability, buy_purpose,
               rating_staff, rating_store, rating_guide, visit_route,
               revisit_score, comment_improve, comment_praise, submitted_at
        FROM survey_responses ${where}
-       ORDER BY submitted_at DESC
-       LIMIT ? OFFSET ?`,
+       ORDER BY submitted_at DESC LIMIT ? OFFSET ?`,
       params,
     );
-
-    // [수정] 결과 데이터의 products 키를 신규 키로 정규화
-    const normalizedRows = rows.map((row) => {
-      let prodArr = [];
-      try {
-        prodArr = JSON.parse(row.products || "[]");
-      } catch (e) {}
-      return {
-        ...row,
-        products: JSON.stringify(normalizeProducts(prodArr)),
-      };
-    });
 
     const [[{ total }]] = await db.execute(
       `SELECT COUNT(*) AS total FROM survey_responses ${where}`,
       storeFilter ? [storeFilter] : [],
     );
 
-    res.json({ rows: normalizedRows, total, page, limit });
+    res.json({ rows, total, page, limit });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "서버 오류" });
-  }
-});
-
-// ══════════════════════════════════════════════════════
-//  GET /api/dashboard  — 대시보드 전용 통계 API
-// ══════════════════════════════════════════════════════
-app.get("/api/dashboard", async (req, res) => {
-  try {
-    const storeFilter = req.query.store || null;
-    const where = storeFilter ? "WHERE store_id = ?" : "";
-    const params = storeFilter ? [storeFilter] : [];
-
-    // 1) KPI + 별점 평균
-    const [[kpi]] = await db.execute(
-      `SELECT COUNT(*) AS total, ROUND(AVG(rating_design), 2) AS avg_design, ROUND(AVG(rating_usability), 2) AS avg_usability, ROUND(AVG(rating_staff), 2) AS avg_staff, ROUND(AVG(rating_store), 2) AS avg_store, ROUND(AVG(rating_guide), 2) AS avg_guide, ROUND(AVG(revisit_score), 2) AS avg_revisit FROM survey_responses ${where}`,
-      params,
-    );
-
-    // 2) 매장별
-    const [byStore] = await db.execute(
-      `SELECT store_id, COUNT(*) AS total, ROUND(AVG(revisit_score), 2) AS avg_revisit FROM survey_responses GROUP BY store_id ORDER BY total DESC`,
-    );
-
-    // 3) 성별
-    const [genderRows] = await db.execute(
-      `SELECT gender, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY gender`,
-      params,
-    );
-
-    // 4) 연령대
-    const [ageRows] = await db.execute(
-      `SELECT age_group, COUNT(*) AS cnt FROM survey_responses ${where} GROUP BY age_group ORDER BY age_group`,
-      params,
-    );
-
-    // 5) 전체 row
-    const [allRows] = await db.execute(
-      `SELECT purpose, categories, products, buy_purpose, visit_route, comment_improve, comment_praise, gender, submitted_at FROM survey_responses ${where} ORDER BY submitted_at DESC`,
-      params,
-    );
-
-    const total = kpi.total || 1;
-
-    // [수정] JSON 배열 집계 시 제품 키 정규화 적용
-    const countArr = (rows, field) => {
-      const map = {};
-      rows.forEach((r) => {
-        let arr = [];
-        try {
-          arr = JSON.parse(r[field] || "[]");
-        } catch {}
-
-        // 제품 필드라면 키를 신규 키로 변환해서 합산
-        if (field === "products") {
-          arr = normalizeProducts(arr);
-        }
-
-        arr.forEach((v) => {
-          map[v] = (map[v] || 0) + 1;
-        });
-      });
-      return map;
-    };
-
-    const purposeCount = countArr(allRows, "purpose");
-    const catCount = countArr(allRows, "categories");
-    const productCount = countArr(allRows, "products");
-    const buyCount = countArr(allRows, "buy_purpose");
-    const routeCount = countArr(allRows, "visit_route");
-
-    // 성별 × 카테고리 크로스탭
-    const genderCat = { male: {}, female: {} };
-    allRows.forEach((r) => {
-      const g = r.gender;
-      if (!genderCat[g]) return;
-      let cats = [];
-      try {
-        cats = JSON.parse(r.categories || "[]");
-      } catch {}
-      cats.forEach((c) => {
-        genderCat[g][c] = (genderCat[g][c] || 0) + 1;
-      });
-    });
-
-    // VOC
-    const voc = allRows
-      .slice(0, 20)
-      .filter((r) => r.comment_improve || r.comment_praise)
-      .map((r) => ({
-        improve: r.comment_improve || "",
-        praise: r.comment_praise || "",
-        date: r.submitted_at,
-      }));
-
-    // 추이
-    const [trendRows] = await db.execute(
-      `SELECT DATE(submitted_at) AS day, COUNT(*) AS cnt FROM survey_responses WHERE submitted_at >= DATE_SUB(NOW(), INTERVAL 14 DAY) ${storeFilter ? "AND store_id = ?" : ""} GROUP BY day ORDER BY day`,
-      storeFilter ? [storeFilter] : [],
-    );
-
-    res.json({
-      kpi,
-      byStore,
-      gender: genderRows,
-      age: ageRows,
-      purpose: purposeCount,
-      categories: catCount,
-      products: productCount,
-      buy_purpose: buyCount,
-      route: routeCount,
-      gender_cat: genderCat,
-      voc,
-      trend: trendRows,
-      total_respondents: total,
-    });
-  } catch (e) {
-    console.error("[GET /api/dashboard]", e);
     res.status(500).json({ error: "서버 오류" });
   }
 });
