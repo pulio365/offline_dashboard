@@ -35,7 +35,7 @@ const db = mysql.createPool({
 });
 
 // ─── 대시보드 인증 미들웨어 ────────────────────────────
-const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN || "1234";
+const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN;
 
 function authDashboard(req, res, next) {
   const token = req.headers["x-dashboard-token"] || req.query.token;
