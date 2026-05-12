@@ -45,8 +45,8 @@ function authDashboard(req, res, next) {
   next();
 }
 
-// ─── 구 키 → 신 키 매핑 테이블 ──────────────────────────
-// 구 survey.html에서 저장된 데이터도 대시보드에서 올바르게 표시됨
+// ─── 키 정규화 맵 ────────────────────────────────────────
+// DB에 구 키/신 키 혼재 → 모두 신 키로 정규화
 const PRODUCT_KEY_MAP = {
   // 구 키 → 신 키
   lb_pulley_thigh: "pulizee",
@@ -66,6 +66,24 @@ const PRODUCT_KEY_MAP = {
   etc_hand: "hand_v1",
   etc_pediplaner: "pediplaner",
   etc_airgua: "airgua",
+  // 신 키는 그대로 (identity)
+  pulizee: "pulizee",
+  calf_v3: "calf_v3",
+  pulition: "pulition",
+  mat: "mat",
+  backpuller_v1: "backpuller_v1",
+  back_cushion: "back_cushion",
+  neck_tapping_v3: "neck_tapping_v3",
+  neckpuller: "neckpuller",
+  thepillow: "thepillow",
+  neck_travel: "neck_travel",
+  minimax: "minimax",
+  gun_belt: "gun_belt",
+  turbofit: "turbofit",
+  wellwork: "wellwork",
+  hand_v1: "hand_v1",
+  pediplaner: "pediplaner",
+  airgua: "airgua",
 };
 
 // JSON 배열에서 구 키 → 신 키로 정규화
@@ -314,7 +332,8 @@ app.post("/api/survey", async (req, res) => {
       return res.status(400).json({ error: "방문목적 미선택" });
     if (!filterArr(categories, VALID_CATEGORIES).length)
       return res.status(400).json({ error: "카테고리 미선택" });
-    if (!filterArr(products, VALID_PRODUCTS).length)
+    // 제품 키는 구/신 혼재 허용 — 최소 1개 이상 선택했는지만 확인
+    if (!Array.isArray(products) || !products.length)
       return res.status(400).json({ error: "제품 미선택" });
     if (!isRating(design))
       return res.status(400).json({ error: "디자인 별점 오류" });
@@ -350,7 +369,7 @@ app.post("/api/survey", async (req, res) => {
         age,
         JSON.stringify(filterArr(purpose, VALID_PURPOSE)),
         JSON.stringify(filterArr(categories, VALID_CATEGORIES)),
-        JSON.stringify(filterArr(products, VALID_PRODUCTS)),
+        JSON.stringify(Array.isArray(products) ? products.filter(Boolean) : []),
         +design,
         +usability,
         JSON.stringify(filterArr(buy_purpose, VALID_BUY_PURPOSE)),
@@ -366,13 +385,14 @@ app.post("/api/survey", async (req, res) => {
     );
 
     res.json({ success: true, id: result.insertId });
+
     sendSlackNotification({
       store_id,
       gender,
       age,
       purpose: filterArr(purpose, VALID_PURPOSE),
       categories: filterArr(categories, VALID_CATEGORIES),
-      products: filterArr(products, VALID_PRODUCTS),
+      products: Array.isArray(products) ? products.filter(Boolean) : [],
       design: +design,
       usability: +usability,
       buy_purpose: filterArr(buy_purpose, VALID_BUY_PURPOSE),
@@ -451,25 +471,28 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
 
     // 5) 원본 rows (JSON 집계용)
     const [allRows] = await db.execute(
-      `SELECT purpose, categories, products, buy_purpose, visit_route,
-              comment_improve, comment_praise, gender, submitted_at
+      `SELECT purpose, categories, products, buy_purpose, visit_route, 
+              comment_improve, comment_praise, gender, age_group, submitted_at
        FROM survey_responses ${where} ORDER BY submitted_at DESC`,
       params,
     );
 
-    // JSON 배열 집계 (구 키 → 신 키 정규화 포함)
     const countArr = (rows, field, normalize = false) => {
       const map = {};
       rows.forEach((r) => {
         if (!r[field]) return;
         let arr = [];
         try {
-          arr = normalize
-            ? normalizeProductKeys(r[field])
-            : JSON.parse(r[field]);
+          // DB에서 가져온 데이터가 이미 객체/배열일 수도 있고 문자열일 수도 있음(mysql2 설정에 따라)
+          const data = r[field];
+          arr = typeof data === "string" ? JSON.parse(data) : data;
           if (!Array.isArray(arr)) arr = [];
-        } catch {
+        } catch (e) {
           arr = [];
+        }
+
+        if (normalize) {
+          arr = arr.map((k) => PRODUCT_KEY_MAP[k] || k);
         }
         arr.filter(Boolean).forEach((v) => {
           map[v] = (map[v] || 0) + 1;
@@ -539,12 +562,11 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
       categories: catCount,
       products: productCount,
       buy_purpose: buyCount,
-      route: routeCount,
+      route: routeCount, // 프론트에서는 'route'라는 키로 받음
       gender_cat: genderCat,
       voc,
       trend: trendRows,
       store_list: storeList,
-      // 프론트에 레이블 맵도 함께 전달 (확장 시 자동 반영)
       labels: {
         PRODUCT_LABEL,
         CAT_LABEL,
