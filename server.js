@@ -366,7 +366,6 @@ app.post("/api/survey", async (req, res) => {
     );
 
     res.json({ success: true, id: result.insertId });
-
     sendSlackNotification({
       store_id,
       gender,
