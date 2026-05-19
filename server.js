@@ -72,6 +72,7 @@ const PRODUCT_KEY_MAP = {
   pulition: "pulition",
   mat: "mat",
   backpuller_v1: "backpuller_v1",
+  backpuller_pro: "backpuller_pro",
   back_cushion: "back_cushion",
   neck_tapping_v3: "neck_tapping_v3",
   neckpuller: "neckpuller",
@@ -82,7 +83,7 @@ const PRODUCT_KEY_MAP = {
   turbofit: "turbofit",
   wellwork: "wellwork",
   hand_v1: "hand_v1",
-  pediplaner: "pediplaner",
+  hand_v2: "hand_v2",
   airgua: "airgua",
 };
 
@@ -125,7 +126,8 @@ const PRODUCT_LABEL = {
   calf_v3: "종아리 마사지기 V3",
   pulition: "풀리션 마사지 부츠",
   mat: "마사지 매트",
-  backpuller_v1: "백풀러 허리 마사지기",
+  backpuller_v1: "허리 마사지기 백풀러",
+  backpuller_pro: "허리 마사지기 백풀러 PRO",
   back_cushion: "등 허리 쿠션 마사지기",
   neck_tapping_v3: "목 어깨 두드림 마사지기 V3",
   neckpuller: "넥풀러 목 어깨 홈케어",
@@ -136,7 +138,7 @@ const PRODUCT_LABEL = {
   turbofit: "터보핏 마사지건",
   wellwork: "풀리오 웰워크",
   hand_v1: "손 마사지기",
-  pediplaner: "패디플래너",
+  hand_v2: "손 마사지기 V2",
   airgua: "에어괄사 마사지기",
 };
 const BUYPURPOSE_LABEL = {
