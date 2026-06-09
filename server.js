@@ -455,11 +455,13 @@ app.get("/api/dashboard", authDashboard, async (req, res) => {
     );
 
     // 2) 매장별
-    const [byStore] = await db.execute(`
-      SELECT store_id, COUNT(*) AS total,
-             ROUND(AVG(revisit_score), 2) AS avg_revisit
-      FROM survey_responses
-      GROUP BY store_id ORDER BY total DESC`);
+    const [byStore] = await db.execute(
+      `SELECT store_id, COUNT(*) AS total,
+              ROUND(AVG(revisit_score), 2) AS avg_revisit
+       FROM survey_responses ${where}
+       GROUP BY store_id ORDER BY total DESC`,
+      params,
+    );
 
     // 3) 성별
     const [genderRows] = await db.execute(
